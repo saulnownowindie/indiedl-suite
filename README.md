@@ -54,37 +54,53 @@ También hay un instalador que encadena los tres:
 INSTALAR_TODO.bat
 ```
 
-## Instalación en Arch Linux (MusoSoup)
+## Instalación en CachyOS / Arch Linux (suite completa)
 
-El script de MusoSoup es multiplataforma. En Arch Linux:
-
-```bash
-cd musosoup
-./instalar_arch.sh
-```
-
-El instalador:
-
-- instala las dependencias del sistema con `pacman`
-  (`python`, `tk`, `python-pillow`, `fontconfig`, `ttf-liberation`,
-  `ttf-dejavu`, `libreoffice-fresh`, `xdg-utils`);
-- crea un venv en `~/.local/share/MusoSoup/venv`;
-- instala `requirements.txt`;
-- deja un acceso en el menú de aplicaciones.
-
-Uso diario:
+La carpeta `cachyos/` instala **las tres apps** en CachyOS (o cualquier Arch
+con `pacman`), usando las versiones actuales y aplicando parches de
+compatibilidad en el momento de instalar:
 
 ```bash
-./ejecutar.sh
-# o desde el menú: "Indie Now MusoSoup"
+cd cachyos
+./instalar_todo.sh
 ```
 
-Si usás otra distro, `instalar_arch.sh` también detecta `dnf` (Fedora/Nobara)
-y `apt` (Debian/Ubuntu).
+Eso deja:
 
-> **Nota:** el descargador y la app de subtítulos están pensados para Windows
-> (usan `win32com`, `icacls` y la API de Resolve en Windows). MusoSoup es la
-> herramienta de esta suite preparada para Linux/Arch.
+| App | Destino | Lanzador |
+|---|---|---|
+| Indie Now DL | `~/.local/share/IndieDL` | `indiedl` / menú |
+| Indie Now Subtítulos | `~/.local/share/Subs-Now` | `subs-now` / menú |
+| MusoSoup | `~/.local/share/MusoSoup` | `musosoup` / menú |
+
+También se puede instalar solo una:
+
+```bash
+cachyos/descargador/instalar.sh
+cachyos/subs/instalar.sh
+cachyos/musosoup/instalar.sh
+```
+
+Los instaladores usan `pacman` (`python`, `tk`, `ffmpeg`, `xdg-utils`,
+`xdg-user-dirs`, `desktop-file-utils`, `fontconfig`, `ttf-liberation`,
+`ttf-dejavu`, `noto-fonts`, `kdialog`, `libreoffice-fresh`) y caen a
+`dnf`/`apt` en otras distros.
+
+Qué adapta cada parche:
+
+- **Descargador**: rutas XDG, `ytdl://` con `.desktop` + `xdg-mime`, cookies
+  de Helium/Chrome/Chromium/Brave/Edge/Firefox/Zen, `os.startfile` →
+  `xdg-open`, fuentes del sistema y diálogos nativos con `kdialog`/`zenity`.
+- **Subtítulos**: Resolve en `/opt/resolve`, `os.startfile` → `xdg-open`,
+  fuentes, DPI/título oscuro como no-op y `LD_LIBRARY_PATH` para CUDA.
+- **MusoSoup**: ya es multiplataforma; `.doc` viejos se convierten con
+  LibreOffice (`soffice`) y `pywin32` solo se instala en Windows.
+
+Detalle completo: [`cachyos/README.md`](cachyos/README.md).
+
+> **Nota:** el descargador y los subtítulos también tienen instaladores para
+> Windows 10/11 (los `.bat` de cada carpeta). La app de subtítulos en Linux
+> necesita DaVinci Resolve en `/opt/resolve` y abierto con una timeline.
 
 ## Estructura
 
@@ -112,6 +128,12 @@ indiedl-suite/
 │  ├─ EJECUTAR_MUSOSOUP_DIARIO.bat
 │  ├─ instalar_arch.sh
 │  └─ ejecutar.sh
+├─ cachyos/                  instalación completa para CachyOS/Arch
+│  ├─ instalar_todo.sh
+│  ├─ common/plat_compat.py
+│  ├─ descargador/          instalar.sh + parche.py
+│  ├─ subs/                 instalar.sh + parche.py
+│  └─ musosoup/             instalar.sh
 ├─ docs/
 │  └─ instrucciones-guiones.txt
 └─ INSTALAR_TODO.bat
