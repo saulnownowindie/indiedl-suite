@@ -1,0 +1,9 @@
+# Los scripts de Linux deben quedar con LF en el repo (si no, no corren en Arch).
+*.sh    text eol=lf
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+*.py    text
+*.pyw   text
+*.md    text
+*.json  text
+*.txt   text

@@ -1,0 +1,39 @@
+# Entornos y artefactos de build
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+dist_anterior/
+_archive/
+_updates/
+*.spec.bak
+
+# Datos locales y secretos
+config.json
+*_config.json
+*_cache.json
+*cookies*
+*.bin
+*.log
+tmp/
+cache/
+
+# Respaldos y empaquetados de trabajo
+*.bak
+*.bak-*
+*.7z
+*.dpx
+*.drx
+
+# Salidas generadas
+*.srt
+LANZAMIENTOS_*.docx
+musosoup_deps.ok
+*.parakeet-onnx/
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store

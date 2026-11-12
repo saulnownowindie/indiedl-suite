@@ -1,0 +1,14 @@
+# Dependencias de MusoSoup (probadas con Python 3.12)
+pillow==13.0.0
+python-docx==1.2.0
+pypdf==6.21.2
+PyMuPDF==2.0
+striprtf==0.0.34
+openpyxl==3.1.5
+python-pptx==1.0.2
+lxml==6.1.3
+et-xmlfile==2.0.0
+typing_extensions==4.16.0
+
+# Solo Windows: automatización de Word para convertir .doc antiguos.
+pywin32==312; sys_platform == "win32"

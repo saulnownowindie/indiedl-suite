@@ -1,0 +1,15 @@
+# Dependencias de IndieDL
+faster-whisper
+numpy
+# Motor Parakeet Ultra (Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx) via onnx-asr
+onnx-asr
+onnxruntime
+# Motor alternativo (fallback de transcripción y respaldo VAD)
+huggingface_hub
+soundfile
+scipy
+silero-vad
+torch
+customtkinter
+yt-dlp
+Pillow
