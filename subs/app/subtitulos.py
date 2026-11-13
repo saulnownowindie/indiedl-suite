@@ -8,6 +8,7 @@ import os
 import re
 import sys
 import json
+import gzip
 import math
 import stat
 import unicodedata
@@ -755,7 +756,192 @@ def _parecido(a, b):
     return difflib.SequenceMatcher(None, a, b).ratio()
 
 
-def corregir(palabras, guion, umbral_nombre=0.72, umbral=0.9):
+def _piezas_texto(texto):
+    """Divide 'Son8' en ['Son', '8'] (el ASR pega números a las palabras)."""
+    return [p for p in re.findall(r"\d+|[^\d]+", str(texto)) if p]
+
+
+def _expandir_palabras(palabras):
+    """Separa números pegados repartiendo el tiempo de la palabra original."""
+    piezas = []
+    for w in palabras:
+        texto = str(w[0])
+        try:
+            ini, fin = float(w[1]), float(w[2])
+        except (TypeError, ValueError, IndexError):
+            continue
+        partes = _piezas_texto(texto)
+        if len(partes) <= 1 or fin <= ini:
+            piezas.append([texto, ini, fin, norm(texto)])
+            continue
+        total = sum(len(p) for p in partes) or 1
+        cur = ini
+        for k, parte in enumerate(partes):
+            nxt = fin if k == len(partes) - 1 else cur + (fin - ini) * len(parte) / total
+            piezas.append([parte, cur, nxt, norm(parte)])
+            cur = nxt
+    return piezas
+
+
+def _repartir_tiempos(n, t0, t1, pesos):
+    """Reparte [t0, t1] en n tramos proporcionales a los pesos."""
+    if n <= 0:
+        return []
+    if t1 <= t0:
+        t1 = t0 + 0.06 * n
+    total = float(sum(pesos)) or float(n)
+    tramos, cur = [], t0
+    for k, peso in enumerate(pesos):
+        nxt = t1 if k == n - 1 else cur + (t1 - t0) * peso / total
+        tramos.append([cur, nxt])
+        cur = nxt
+    return tramos
+
+
+def _es_ruido(run, res, siguiente=""):
+    """Palabra sobrante del ASR: 'di'/'que' suelta, tartamudeo o repetición."""
+    claves = [p[3] for p in run if p[3]]
+    if not claves:
+        return True
+    if len(run) <= 2 and all(len(c) <= 3 for c in claves):
+        return True
+    # Repetición inmediata: "quería quería", "pesado pesado".
+    previo = norm(res[-1][0]) if res else ""
+    if len(claves) == 1 and (claves[0] == previo or claves[0] == siguiente):
+        return True
+    # Tartamudeo corto que repite el final de lo anterior o el comienzo de lo
+    # que sigue ("la quería | quería así").
+    if len(claves) <= 3 and (claves[0] == previo or claves[-1] == siguiente):
+        return True
+    return False
+
+
+def _repeticion_de_toma(run, res, B=None, j1=None):
+    """Tramo extra que repite una toma: lo anterior o el guion del corte."""
+    claves = [p[3] for p in run if p[3]]
+    if len(claves) < 4:
+        return False
+    previas = [norm(r[0]) for r in res[-len(claves):] if norm(r[0])]
+    if previas and difflib.SequenceMatcher(None, claves, previas, autojunk=False).ratio() >= 0.75:
+        return True
+    # El tramo extra está armado con palabras del guion alrededor del punto de
+    # corte: es una toma repetida que el guion ya cubre más adelante.
+    if B and j1 is not None:
+        ini = max(0, j1 - len(claves) - 4)
+        fin = min(len(B), j1 + len(claves) + 4)
+        ventana = B[ini:fin]
+        if ventana and difflib.SequenceMatcher(None, claves, ventana, autojunk=False).ratio() >= 0.6:
+            return True
+    return False
+
+
+_VOCAB_ES = None
+_VOCAB_ES_AVISO = False
+
+
+def _vocab_es():
+    """Palabras de uso real en español, para saber si el audio dijo algo válido.
+
+    Se carga una sola vez desde `palabras_es.txt.gz`, una lista armada con
+    frecuencias de uso en español descartando las que son más frecuentes en
+    inglés ("apple", "mount", "kate", "farm"). Así "piscina" defiende lo que
+    se dijo, pero "maunt" o "form" no pueden reemplazar a "Milne" o "Farm".
+    Si el archivo no está, el guion manda siempre y todo sigue funcionando.
+    """
+    global _VOCAB_ES, _VOCAB_ES_AVISO
+    if _VOCAB_ES is not None:
+        return _VOCAB_ES
+    _VOCAB_ES = set()
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "palabras_es.txt.gz")
+    try:
+        with gzip.open(ruta, "rt", encoding="utf-8") as f:
+            _VOCAB_ES = {ln.strip() for ln in f if ln.strip()}
+    except (OSError, EOFError, UnicodeDecodeError) as exc:
+        if not _VOCAB_ES_AVISO:
+            _VOCAB_ES_AVISO = True
+            _log("[guion] falta palabras_es.txt.gz (%s): el guion manda siempre "
+                 "sobre el texto." % exc)
+    return _VOCAB_ES
+
+
+def _palabra_es(p):
+    return bool(p) and p in _vocab_es()
+
+
+# Claquetas y marcas de grabación: nunca deben reemplazar una palabra del guion.
+_CLAQUETAS = frozenset((
+    "grabando", "corte", "corten", "toma", "claqueta", "silencio",
+    "accion", "empezamos", "marca", "listo",
+))
+
+# Palabras de enlace: el ASR las confunde seguido ("fue" por "su") y el guion
+# resuelve la gramática mejor que lo que se escucha.
+_ENLACES = frozenset((
+    "a", "al", "algo", "como", "con", "contra", "cual", "cuando", "de", "del",
+    "donde", "el", "ella", "ellas", "ellos", "en", "entre", "era", "es", "esa",
+    "ese", "eso", "esta", "este", "esto", "fue", "ha", "han", "hasta", "hay",
+    "la", "las", "le", "les", "lo", "los", "mas", "me", "mi", "mis", "mucho",
+    "muy", "no", "nos", "o", "para", "pero", "por", "que", "se", "ser", "si",
+    "sin", "sobre", "son", "su", "sus", "te", "tu", "tus", "un", "una", "uno",
+    "unos", "unas", "y", "ya", "yo",
+))
+
+
+def _texto_final(pieza, token):
+    """Elige entre lo que se dijo y lo que dice el guion.
+
+    El audio manda cuando dijo una palabra real en español: si el guion dice
+    "pileta" y en la grabación se oye "piscina", se escribe "piscina", porque
+    el guion es una guía y no tiene por qué tener la última palabra. El guion
+    manda en nombres propios, siglas, números y en todo lo que el ASR oyó mal
+    ("maunt" por "Milne", "form" por "Farm", "Let's Apple in four").
+    """
+    a_txt, b_txt = str(pieza[0]), str(token[0])
+    a, b = norm(a_txt), norm(b_txt)
+    if not b:
+        return a_txt
+    if not a or a == b:
+        return b_txt
+    # Nombres, siglas y números: el guion es la referencia.
+    if b.isdigit() or a.isdigit():
+        return b_txt
+    if b_txt[:1].isupper():
+        return b_txt
+    # Claquetas de la grabación que se colaron en un tramo alineado.
+    if a in _CLAQUETAS:
+        return b_txt
+    # Artículos, preposiciones, auxiliares: manda el guion.
+    if b in _ENLACES:
+        return b_txt
+    # El audio dijo una palabra real: se respeta lo que se escucha.
+    if _palabra_es(a):
+        return a_txt
+    return b_txt
+
+
+def _quitar_duplicados(piezas, ventana=0.35):
+    """Quita la misma palabra repetida pegada (borde del VAD o del ASR).
+
+    Se queda con la versión de mejor duración. Si el guion repite la palabra a
+    propósito ("A. A. Milne", "no, no"), la alineación la vuelve a poner.
+    """
+    def clave(p):
+        return p[3] if len(p) > 3 else norm(p[0])
+
+    limpio = []
+    for p in piezas:
+        if limpio:
+            prev = limpio[-1]
+            if clave(p) and clave(p) == clave(prev) and float(p[1]) - float(prev[2]) <= ventana:
+                if (float(p[2]) - float(p[1])) > (float(prev[2]) - float(prev[1])):
+                    limpio[-1] = p
+                continue
+        limpio.append(p)
+    return limpio
+
+
+def _corregir_conservador(palabras, guion, umbral_nombre=0.72, umbral=0.9):
+    """Respaldo cuando el guion se parece poco al audio: solo corrige nombres."""
     if not guion or not palabras:
         return [[w[0], w[1], w[2], None] for w in palabras]
     A = [norm(w[0]) for w in palabras]
@@ -788,7 +974,7 @@ def corregir(palabras, guion, umbral_nombre=0.72, umbral=0.9):
     for i, w in enumerate(palabras):
         j = asign[i]
         texto_final = w[0]  # El audio manda.
-        
+
         if j is not None:
             # El guión SOLO corrige si la palabra es exactamente la misma (tildes, mayúsculas)
             a_n, b_n = norm(w[0]), norm(guion[j][0])
@@ -800,7 +986,7 @@ def corregir(palabras, guion, umbral_nombre=0.72, umbral=0.9):
                 r = _parecido(a_n, b_n)
                 if (guion[j][1] is not None and r >= 0.72) or r >= 0.9:
                     texto_final = guion[j][0]
-                
+
         res.append([texto_final, w[1], w[2], guion[j][1] if j is not None else None, j])
 
     for g in sorted({t[1] for t in guion if t[1] is not None}):
@@ -811,6 +997,157 @@ def corregir(palabras, guion, umbral_nombre=0.72, umbral=0.9):
             continue
         for p in range(pos[0], pos[-1] + 1): res[p][3] = g
     return [r[:4] for r in res]
+
+
+def _bloques_confiables(matcher, max_salto=8):
+    """Descarta coincidencias sueltas que saltan medio guion.
+
+    El ASR puede oír "su" y el guion tener otro "su" diez palabras más
+    adelante. Si el audio no avanza, esa coincidencia no es una frase
+    alineada: es una palabra suelta que descoloca todo lo que sigue. Solo se
+    descartan coincidencias de una o dos palabras; una frase entera que sigue
+    después de un salto sí es válida.
+    """
+    bloques, i_ant, j_ant = [], 0, 0
+    for b in matcher.get_matching_blocks():
+        if not b.size:
+            continue
+        if (bloques and b.size <= 2 and b.b - j_ant >= max_salto
+                and b.a - i_ant <= 2):
+            continue
+        bloques.append(b)
+        i_ant, j_ant = b.a + b.size, b.b + b.size
+    return bloques
+
+
+def _opcodes_de_bloques(bloques, n_a, n_b):
+    """Arma los opcodes de difflib a partir de los bloques que quedaron."""
+    ops, i, j = [], 0, 0
+    for b in bloques:
+        if i < b.a and j < b.b:
+            ops.append(("replace", i, b.a, j, b.b))
+        elif i < b.a:
+            ops.append(("delete", i, b.a, j, j))
+        elif j < b.b:
+            ops.append(("insert", i, i, j, b.b))
+        if b.size:
+            ops.append(("equal", b.a, b.a + b.size, b.b, b.b + b.size))
+        i, j = b.a + b.size, b.b + b.size
+    if i < n_a and j < n_b:
+        ops.append(("replace", i, n_a, j, n_b))
+    elif i < n_a:
+        ops.append(("delete", i, n_a, j, j))
+    elif j < n_b:
+        ops.append(("insert", i, i, j, n_b))
+    return ops
+
+
+def corregir(palabras, guion, umbral_nombre=0.72, umbral=0.9):
+    """Proyecta el guion sobre los tiempos del audio.
+
+    El audio manda en los tiempos; el guion manda en el texto de los tramos
+    que coinciden. Antes solo se cambiaban palabras casi idénticas, así que
+    errores como "Let's Apple in four" por "Led Zeppelin IV", los números
+    pegados ("cumplió55") o palabras inventadas ("di") quedaban sin tocar.
+    Pero tampoco se cambia lo que el audio dijo con una palabra real
+    ("piscina" por "pileta"): ver `_texto_final`.
+    """
+    if not guion or not palabras:
+        return [[w[0], w[1], w[2], None] for w in palabras]
+    piezas = _quitar_duplicados(_expandir_palabras(palabras))
+    idx = [j for j, t in enumerate(guion) if norm(t[0])]
+    B = [norm(guion[j][0]) for j in idx]
+    if not piezas or not B:
+        return [[w[0], w[1], w[2], None] for w in palabras]
+    A = [p[3] for p in piezas]
+    matcher = difflib.SequenceMatcher(None, A, B, autojunk=False)
+    bloques = _bloques_confiables(matcher)
+    # Cobertura: qué parte del audio aparece, en orden, en el guion. No usamos
+    # ratio() porque castiga los guiones largos cuando se transcribe un tramo
+    # (o al revés) y hacía que no se corrigiera nada.
+    cubierto = sum(b.size for b in bloques) / max(1, len(A))
+    # Si el guion no tiene nada que ver con el audio, no se proyecta: evita
+    # borrar una transcripción buena por haber cargado el guion equivocado.
+    if cubierto < 0.35:
+        _log("[guion] el guion no coincide con el audio (%.0f%% de cobertura); "
+             "solo se corrigen nombres." % (100 * cubierto))
+        return _corregir_conservador(palabras, guion, umbral_nombre, umbral)
+    # Con un guion que explica la mayor parte del audio, manda el guion: lo que
+    # sobra en la transcripción es ruido, claqueta o una toma repetida.
+    fiel = cubierto >= 0.55
+    res = []  # [texto, inicio, fin, grupo]
+    audio_gana = []  # palabras reales que se respetaron aunque el guion diga otra cosa
+    for tag, i1, i2, j1, j2 in _opcodes_de_bloques(bloques, len(A), len(B)):
+        if tag == "equal":
+            for k in range(i2 - i1):
+                j = idx[j1 + k]
+                p = piezas[i1 + k]
+                res.append([guion[j][0], p[1], p[2], guion[j][1]])
+        elif tag == "replace":
+            a_span = piezas[i1:i2]
+            js = [idx[j] for j in range(j1, j2)]
+            if len(a_span) == len(js):
+                for p, j in zip(a_span, js):
+                    # Palabra por palabra: el guion corrige nombres y errores
+                    # del ASR, pero no pisa una palabra real que sí se dijo.
+                    final = _texto_final(p, guion[j])
+                    if norm(final) != norm(guion[j][0]):
+                        audio_gana.append("'%s' por '%s'" % (final, guion[j][0]))
+                    res.append([final, p[1], p[2], guion[j][1]])
+            else:
+                t0, t1 = a_span[0][1], a_span[-1][2]
+                # No meter más texto del que entra en el audio: si el guion
+                # trae una frase entera donde el ASR oyó una palabra, se
+                # conserva lo oído para no inventar subtítulos.
+                if len(js) > 2 * len(a_span) + 2 and (t1 - t0) < 0.12 * len(js):
+                    if not fiel:
+                        for p in a_span:
+                            res.append([p[0], p[1], p[2], None])
+                    continue
+                pesos = [len(guion[j][0]) + 1 for j in js]
+                for (s, e), j in zip(_repartir_tiempos(len(js), t0, t1, pesos), js):
+                    res.append([guion[j][0], s, e, guion[j][1]])
+        elif tag == "delete":
+            run = piezas[i1:i2]
+            if fiel or _es_ruido(run, res, B[j1] if j1 < len(B) else ""):
+                muestra = " ".join(str(p[0]) for p in run[:16])
+                if len(run) > 16:
+                    muestra += " …"
+                _log("[guion] descartado '%s' (no está en el guion)" % muestra)
+                continue
+            if _repeticion_de_toma(run, res, B, j1):
+                _log("[guion] descartada una toma repetida de %d palabras." % len(run))
+                continue
+            for p in run:
+                res.append([p[0], p[1], p[2], None])
+        elif tag == "insert":
+            js = [idx[j] for j in range(j1, j2)]
+            t_prev = res[-1][2] if res else (piezas[i1][1] if i1 < len(piezas) else 0.0)
+            t_next = piezas[i1][1] if i1 < len(piezas) else t_prev
+            n = len(js)
+            hueco = t_next - t_prev
+            # El guion sigue después de donde termina el audio (o falta un
+            # tramo grande que no se habló): no se agregan subtítulos mudos.
+            if (i1 >= len(piezas) and n > 4) or (n > 2 and hueco < 0.12 * n):
+                _log("[guion] no se agregan %d palabras que no están en el audio." % n)
+                continue
+            if hueco <= 0:
+                t_next = t_prev + 0.22 * n
+            pesos = [len(guion[j][0]) + 1 for j in js]
+            for (s, e), j in zip(_repartir_tiempos(n, t_prev, t_next, pesos), js):
+                res.append([guion[j][0], s, e, guion[j][1]])
+    if audio_gana:
+        _log("[guion] se respetó lo que dice el audio en %d palabra(s): %s"
+             % (len(audio_gana), ", ".join(audio_gana[:12])))
+    if not res:
+        return [[w[0], w[1], w[2], None] for w in palabras]
+    fin_prev = 0.0
+    for r in res:
+        ini = max(float(r[1]), fin_prev)
+        fin = max(float(r[2]), ini + 0.02)
+        r[1], r[2] = ini, fin
+        fin_prev = fin
+    return res
 
 
 _ultimos = []
@@ -2664,6 +3001,7 @@ def _transcribir_parakeet_pal(segs, progreso, p_ini=30, p_fin=90):
     # Evita que un sub del clip actual pise el anterior.
     fin_prev = 0.0
     n_frag = 0
+    borde_prev = None
 
     def _emitir_palabras(lista, seg_inicio, seg_fin):
         """Añade las palabras respetando el orden, sin estirarlas de más.
@@ -2755,11 +3093,35 @@ def _transcribir_parakeet_pal(segs, progreso, p_ini=30, p_fin=90):
                 paso = max(0.02, min(0.45, (seg_fin - seg_inicio) / len(palabras_txt)))
                 lista = [[w, seg_inicio + i * paso, seg_inicio + (i + 1) * paso]
                          for i, w in enumerate(palabras_txt)]
-            _emitir_palabras(lista, seg_inicio, seg_fin)
+            # Borde del VAD: si el fragmento anterior terminó cortando una
+            # palabra ("di|disco") o repitió la misma, sobra ese resto.
+            if palabras and lista and borde_prev is not None:
+                prev = palabras[-1]
+                a, b = norm(prev[0]), norm(lista[0][0])
+                toca_borde = abs(float(prev[2]) - borde_prev) <= 0.08
+                junto = float(lista[0][1]) - float(prev[2]) <= 0.4
+                if a and b and toca_borde and junto:
+                    if a == b:
+                        dur_prev = float(prev[2]) - float(prev[1])
+                        dur_new = float(lista[0][2]) - float(lista[0][1])
+                        if dur_new >= dur_prev:
+                            palabras.pop()
+                            fin_prev = palabras[-1][2] if palabras else 0.0
+                        else:
+                            lista = lista[1:]
+                    elif len(a) <= 3 and b.startswith(a):
+                        palabras.pop()
+                        fin_prev = palabras[-1][2] if palabras else 0.0
+            if lista:
+                _emitir_palabras(lista, seg_inicio, seg_fin)
+            borde_prev = seg_fin
         hecho += dur_seg
         avance = min(1.0, hecho / total)
         progreso(p_ini + (p_fin - p_ini) * avance,
                  "Motor: transcribiendo con PARAKEET ULTRA…")
+    # El VAD puede repetir la misma palabra al cerrar y abrir fragmentos
+    # solapados: se ve como un subtítulo duplicado, así que se deja una sola.
+    palabras = _quitar_duplicados(palabras)
     _motor_log(f"PARAKEET: {len(palabras)} palabras en {n_frag} fragmentos de voz.")
     return palabras
 

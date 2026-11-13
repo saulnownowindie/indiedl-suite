@@ -44,7 +44,9 @@ fi
 # ── 2. Copiar la app ────────────────────────────────────────
 log "Copiando la aplicación"
 cp -a "$SUITE/musosoup/musosoup_diario.py" "$SUITE/musosoup/musosoup_ui.py" "$PREFIX/"
+cp -a "$SUITE/musosoup/musosoup_config.example.json" "$PREFIX/musosoup_config.example.json"
 cp -a "$SUITE/musosoup/requirements.txt" "$PREFIX/requirements.txt"
+cp -a "$HERE/verificar.py" "$PREFIX/verificar.py"
 
 # ── 3. Entorno virtual + dependencias ───────────────────────
 log "Entorno virtual"
@@ -53,6 +55,10 @@ if [ ! -x "$PREFIX/venv/bin/python" ]; then
 fi
 "$PREFIX/venv/bin/python" -m pip install --quiet --upgrade pip
 "$PREFIX/venv/bin/python" -m pip install --quiet -r "$PREFIX/requirements.txt"
+
+# ── 3b. Verificación de compatibilidad Linux ────────────────
+log "Verificando compatibilidad Linux"
+"$PREFIX/venv/bin/python" "$PREFIX/verificar.py" "$PREFIX"
 
 # ── 4. Acceso en el menú ────────────────────────────────────
 log "Acceso en el menú"

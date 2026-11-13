@@ -50,11 +50,13 @@ except ImportError:
 
 from musosoup_ui import MusoSoupApp, init_fonts
 
-try:
-    import ctypes
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
-except Exception:
-    pass
+# DPI awareness es exclusivo de Windows; en Linux no se intenta siquiera.
+if os.name == "nt":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
 
 
 AQUI = os.path.dirname(os.path.abspath(__file__))

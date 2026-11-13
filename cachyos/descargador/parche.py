@@ -121,11 +121,41 @@ NO_WINDOW = pc.NO_WINDOW"""),
         ('    "last_dir": "E:\\\\" if os.path.isdir("E:\\\\") else str(Path.home() / "Videos"),',
          '    "last_dir": str(pc.download_dir()),'),
 
-        # No cambiar el directorio de trabajo global
+        # No cambiar el directorio de trabajo global (bloque antiguo)
         ("""    try: os.chdir(str(APP_DIR))
     except OSError: pass
     return temp_path""",
          "    return temp_path"),
+
+        # Versiones nuevas añadieron un os.chdir() a nivel de módulo: en Linux
+        # cambiaría el CWD del proceso entero ~/.local/share/IndieDL.
+        ("""    tempfile.tempdir = str(TEMP_DIR)
+    os.chdir(str(APP_DIR))
+except OSError as exc:""",
+         """    tempfile.tempdir = str(TEMP_DIR)
+except OSError as exc:"""),
+
+        # Procesos del navegador: tasklist/taskkill son de Windows. En Linux
+        # usamos psutil/ps + pkill (con confirmación previa en la UI).
+        (r"def running_browser_processes\(key\):.*?(?=\ndef _instagram_cookie_rows)",
+         "def running_browser_processes(key):\n"
+         "    hint = BROWSER_PROC_HINT.get(key, key)\n"
+         "    try:\n"
+         "        nombres = pc.list_processes()\n"
+         "    except Exception:\n"
+         "        return []\n"
+         "    encontrados = set()\n"
+         "    for nombre in nombres:\n"
+         "        n = nombre.lower()\n"
+         "        if hint in n and (n.endswith('.exe') or not pc.IS_WIN):\n"
+         "            encontrados.add(nombre)\n"
+         "    return sorted(encontrados)\n"
+         "\n"
+         "def close_browser_processes(names):\n"
+         "    for n in names:\n"
+         "        pc.kill_process(n)\n"
+         "\n",
+         True),
 
         # Fuentes del banner halftone
         ("""    for p in ("C:/Windows/Fonts/seguibl.ttf", "C:/Windows/Fonts/ariblk.ttf", "C:/Windows/Fonts/arialbd.ttf",
@@ -213,6 +243,51 @@ def patch_entry(p: Path) -> bool:
     return True
 
 
+# ─────────────────────────────────────────────────────────────
+# Verificación estricta: si el código de Windows cambia y un patrón
+# deja de coincidir, el instalador debe fallar en lugar de dejar una
+# instalación de Linux parcial y aparentemente correcta.
+# ─────────────────────────────────────────────────────────────
+REQUERIDO = {
+    "indiedl_core.py": ['pc.app_dir("IndieDL")', "pc.cache_dir(",
+                        "pc.download_dir()", "pc.register_protocol(",
+                        "pc.browser_profiles()", "pc.font_file(",
+                        "pc.list_processes()", "pc.kill_process(",
+                        'if os.name != "nt":\n        return bytes(data)'],
+    "indiedl_ui.py": ["pc.open_path(", "pc.patch_tkinter_dialogs()",
+                      "pc.font_file("],
+    "indiedl.py": ['log("Protocolo ytdl:// registrado.")'],
+}
+
+PROHIBIDO = {
+    "indiedl_core.py": ['APP_DIR = Path(os.environ.get("LOCALAPPDATA"',
+                        '"last_dir": "E:\\\\"', "os.chdir(str(APP_DIR))",
+                        'subprocess.run(["tasklist"'],
+    "indiedl_ui.py": ["os.startfile(", '"C:/Windows/Fonts/seguisym.ttf"'],
+}
+
+
+def verificar(here: Path) -> list[str]:
+    problemas: list[str] = []
+    for nombre, marcadores in REQUERIDO.items():
+        p = here / nombre
+        if not p.is_file():
+            problemas.append(f"{nombre}: archivo no encontrado")
+            continue
+        texto = p.read_text(encoding="utf-8", errors="replace")
+        for marca in marcadores:
+            if marca not in texto:
+                problemas.append(f"{nombre}: falta {marca!r} (parche no aplicado)")
+        for marca in PROHIBIDO.get(nombre, []):
+            if marca in texto:
+                problemas.append(f"{nombre}: sigue presente {marca!r}")
+        try:
+            compile(texto, str(p), "exec")
+        except SyntaxError as exc:
+            problemas.append(f"{nombre}: error de sintaxis ({exc})")
+    return problemas
+
+
 def main() -> int:
     here = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parent
     print(f"Parcheando Indie Now DL en {here}…\n")
@@ -227,7 +302,16 @@ def main() -> int:
             fn(candidate)
         else:
             print(f"  · {name}: no encontrado (saltando)")
-    print("\nListo.")
+
+    problemas = verificar(here)
+    if problemas:
+        print("\nERROR: la conversión a Linux quedó incompleta:", file=sys.stderr)
+        for x in problemas:
+            print(f"  - {x}", file=sys.stderr)
+        print("\nRevisá cachyos/descargador/parche.py: cambió el código de "
+              "Windows y algún patrón ya no coincide.", file=sys.stderr)
+        return 1
+    print("\nVerificación: todos los parches aplicados y sintaxis OK.")
     return 0
 
 

@@ -873,8 +873,10 @@ class ItemRow(tk.Frame):
         self._paint()
 
     def _play_audio(self, path):
+        # _abrir() ya bifurca por SO (os.startfile / open / xdg-open).
+        # Llamar a os.startfile() aquí rompía la reproducción en Linux.
         try:
-            os.startfile(path)
+            _abrir(path)
         except Exception as e:
             print("Error al abrir audio:", e)
 

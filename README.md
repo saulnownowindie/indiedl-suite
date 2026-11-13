@@ -90,11 +90,18 @@ Qué adapta cada parche:
 
 - **Descargador**: rutas XDG, `ytdl://` con `.desktop` + `xdg-mime`, cookies
   de Helium/Chrome/Chromium/Brave/Edge/Firefox/Zen, `os.startfile` →
-  `xdg-open`, fuentes del sistema y diálogos nativos con `kdialog`/`zenity`.
+  `xdg-open`, fuentes del sistema, diálogos nativos con `kdialog`/`zenity`
+  y cierre de navegador con `psutil`/`pkill` en vez de `tasklist`/`taskkill`.
 - **Subtítulos**: Resolve en `/opt/resolve`, `os.startfile` → `xdg-open`,
-  fuentes, DPI/título oscuro como no-op y `LD_LIBRARY_PATH` para CUDA.
+  fuentes, DPI/título oscuro como no-op, `LD_LIBRARY_PATH` para CUDA y un
+  launcher propio de Linux para la consola de Resolve (`SubsSaul.linux.py`).
 - **MusoSoup**: ya es multiplataforma; `.doc` viejos se convierten con
-  LibreOffice (`soffice`) y `pywin32` solo se instala en Windows.
+  LibreOffice (`soffice`), `pywin32` solo se instala en Windows y la apertura
+  de archivos/audio usa `xdg-open`.
+
+Los tres instaladores de Linux **verifican el resultado** antes de terminar:
+si el código de Windows cambia y un parche deja de coincidir, la instalación
+falla con un mensaje claro en lugar de dejar una app parcialmente adaptada.
 
 Detalle completo: [`cachyos/README.md`](cachyos/README.md).
 
@@ -131,9 +138,9 @@ indiedl-suite/
 ├─ cachyos/                  instalación completa para CachyOS/Arch
 │  ├─ instalar_todo.sh
 │  ├─ common/plat_compat.py
-│  ├─ descargador/          instalar.sh + parche.py
-│  ├─ subs/                 instalar.sh + parche.py
-│  └─ musosoup/             instalar.sh
+│  ├─ descargador/          instalar.sh + parche.py (con verificación)
+│  ├─ subs/                 instalar.sh + parche.py + SubsSaul.linux.py
+│  └─ musosoup/             instalar.sh + verificar.py
 ├─ docs/
 │  └─ instrucciones-guiones.txt
 └─ INSTALAR_TODO.bat

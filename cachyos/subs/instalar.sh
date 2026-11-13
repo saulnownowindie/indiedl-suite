@@ -46,6 +46,8 @@ log "Copiando la aplicación"
 cp -a "$SUITE/subs/app/." "$PREFIX/"
 cp -a "$SUITE/cachyos/common/plat_compat.py" "$PREFIX/plat_compat.py"
 cp -a "$HERE/parche.py" "$PREFIX/parche.py"
+# parche.py busca este archivo a su lado para reemplazar el launcher de Resolve.
+cp -a "$HERE/SubsSaul.linux.py" "$PREFIX/SubsSaul.linux.py"
 cp -a "$SUITE/subs/requirements.txt" "$PREFIX/requirements.txt"
 
 # ── 3. Entorno virtual + dependencias ───────────────────────

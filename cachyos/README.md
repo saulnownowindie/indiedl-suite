@@ -54,6 +54,9 @@ Cada app crea su propio `venv` dentro de su carpeta en `~/.local/share`.
 - `DPAPI` (cifrado de cookies de Instagram) → guardado directo con permisos
   del usuario en Linux.
 - Diálogos nativos con `kdialog` (KDE) o `zenity` (GTK), con vuelta a Tkinter.
+- `tasklist`/`taskkill` → `psutil`/`ps` + `pkill` (cierre de navegador para
+  leer cookies de Instagram; siempre con confirmación en la UI).
+- Se evita el `os.chdir()` global a nivel de módulo.
 
 ### Subtítulos (`subs/parche.py`)
 
@@ -63,6 +66,12 @@ Cada app crea su propio `venv` dentro de su carpeta en `~/.local/share`.
 - `os.startfile` → `xdg-open`.
 - Fuentes → Liberation/DejaVu/Noto.
 - CUDA: agrega `lib/` de los paquetes NVIDIA y `LD_LIBRARY_PATH` en Linux.
+- Fallback de reportes de verificación a `$XDG_DATA_HOME` en vez de
+  `%LOCALAPPDATA%`.
+- **`SubsSaul.py`** se sustituye por `SubsSaul.linux.py`: el original busca
+  `.exe` / `pythonw.exe` bajo `%LOCALAPPDATA%` y no puede arrancar la app
+  desde la consola de scripting de Resolve en Linux. La versión Linux usa el
+  `venv` de la instalación y busca `subtitulos.py` en su propia carpeta.
 
 ### MusoSoup (`musosoup/instalar.sh`)
 
@@ -71,6 +80,24 @@ No necesita parche: la versión actual ya es multiplataforma.
 - La interfaz usa fuentes con fallback a Liberation/DejaVu/Noto.
 - `.doc` antiguos se convierten con `soffice` (LibreOffice).
 - `pywin32` está marcado como dependencia solo de Windows.
+- Apertura de archivos/audio con `xdg-open` (se corrigió `_play_audio`,
+  que llamaba a `os.startfile` directamente y fallaba en Linux).
+
+## Verificación obligatoria de los parches
+
+Los tres instaladores comprueban el resultado antes de dar la instalación por
+buena: revisan que cada sustitución esperada esté aplicada, que no queden
+llamadas exclusivas de Windows y que todos los `.py` compilen. Si el código de
+Windows cambia y un patrón deja de coincidir, **la instalación falla con un
+mensaje claro** en vez de dejar una app a medias y aparentemente correcta.
+
+| App | Verificador |
+|---|---|
+| Descargador | `descargador/parche.py` (integrado) |
+| Subtítulos | `subs/parche.py` (integrado) |
+| MusoSoup | `musosoup/verificar.py` |
+
+Los parches son idempotentes: reinstalar no vuelve a modificar los archivos.
 
 ## Notas
 
@@ -115,10 +142,12 @@ cachyos/
 ├─ subs/
 │  ├─ instalar.sh
 │  ├─ desinstalar.sh
-│  └─ parche.py
+│  ├─ parche.py
+│  └─ SubsSaul.linux.py   Launcher de Resolve para Linux
 └─ musosoup/
    ├─ instalar.sh
-   └─ desinstalar.sh
+   ├─ desinstalar.sh
+   └─ verificar.py         Comprobación de compatibilidad
 ```
 
 > Los instaladores usan `pacman` si está disponible y caen a `dnf`/`apt`

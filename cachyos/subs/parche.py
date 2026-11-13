@@ -270,6 +270,98 @@ sys.path.append(os.path.join(os.environ["RESOLVE_SCRIPT_API"], "Modules"))'''),
     return True
 
 
+# ─────────────────────────────────────────────────────────────
+# verificacion.py: fallback XDG en Linux para los reportes de verificación
+# ─────────────────────────────────────────────────────────────
+def patch_verificacion(p: Path) -> bool:
+    text = p.read_text(encoding="utf-8")
+    orig = text
+    subs = [
+        ('''carpeta = os.path.join(os.environ.get("LOCALAPPDATA",
+                                                   os.path.expanduser("~")),
+                                   "IndieDL", "verificaciones")''',
+         '''if os.name == "nt":
+                _base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+            else:
+                _base = (os.environ.get("XDG_DATA_HOME")
+                         or os.path.join(os.path.expanduser("~"), ".local", "share"))
+            carpeta = os.path.join(_base, "IndieDL", "verificaciones")'''),
+    ]
+    text, n = apply(p.name, text, subs)
+    if text != orig:
+        p.write_text(text, encoding="utf-8")
+        print(f"  ok {p.name}: {n} parches (rutas XDG)")
+    else:
+        print(f"  - {p.name}: sin cambios")
+    return True
+
+
+# ─────────────────────────────────────────────────────────────
+# SubsSaul.py: el launcher de Windows busca .exe / pythonw.exe y
+# %LOCALAPPDATA%; en Linux no sirve. Se reemplaza por completo.
+# ─────────────────────────────────────────────────────────────
+def instalar_launcher_linux(here: Path) -> bool:
+    destino = here / "SubsSaul.py"
+    if destino.exists() and "indiedl-linux-launcher-v1" in destino.read_text(
+            encoding="utf-8", errors="replace"):
+        print("  - SubsSaul.py: sin cambios (ya es la versión Linux)")
+        return True
+    fuente = Path(__file__).resolve().with_name("SubsSaul.linux.py")
+    if not fuente.is_file():
+        print("  ! SubsSaul.linux.py no encontrado: el launcher de Resolve "
+              "seguirá siendo el de Windows", file=sys.stderr)
+        return False
+    destino.write_text(fuente.read_text(encoding="utf-8"), encoding="utf-8")
+    print("  ok SubsSaul.py: launcher de Resolve adaptado a Linux")
+    return True
+
+
+# ─────────────────────────────────────────────────────────────
+# Verificación estricta: si un patrón dejó de coincidir tras una
+# actualización del código Windows, el instalador debe FALLAR y no
+# dejar una instalación de Linux a medias y silenciosa.
+# ─────────────────────────────────────────────────────────────
+REQUERIDO = {
+    "subtitulos.py": ["pc.set_dpi_aware()", "pc.resolve_scripting_paths()"],
+    "subtitulos_ui.py": ["pc.open_path("],
+    "indie_ui.py": ["pc.font_file("],
+    "gpu_runtime.py": ["LD_LIBRARY_PATH"],
+    "cortes.py": ["pc.resolve_scripting_paths()"],
+    "SubsSaul.py": ["indiedl-linux-launcher-v1"],
+}
+
+PROHIBIDO = {
+    "subtitulos.py": ["ctypes.windll.shcore.SetProcessDpiAwareness",
+                      'r"C:\\ProgramData\\Blackmagic Design'],
+    "subtitulos_ui.py": ["os.startfile("],
+    "indie_ui.py": ['"C:/Windows/Fonts/" + name'],
+    "SubsSaul.py": ["pythonw.exe", "LOCALAPPDATA"],
+}
+
+
+def verificar(here: Path) -> list[str]:
+    problemas: list[str] = []
+    for nombre, marcadores in REQUERIDO.items():
+        p = here / nombre
+        if not p.is_file():
+            problemas.append(f"{nombre}: archivo no encontrado")
+            continue
+        texto = p.read_text(encoding="utf-8", errors="replace")
+        for marca in marcadores:
+            if marca not in texto:
+                problemas.append(f"{nombre}: falta {marca!r} (parche no aplicado)")
+        for marca in PROHIBIDO.get(nombre, []):
+            if marca in texto:
+                problemas.append(f"{nombre}: sigue presente {marca!r}")
+        # Un parche mal aplicado puede dejar el archivo con sintaxis inválida.
+        if p.suffix == ".py":
+            try:
+                compile(texto, str(p), "exec")
+            except SyntaxError as exc:
+                problemas.append(f"{nombre}: error de sintaxis ({exc})")
+    return problemas
+
+
 def main() -> int:
     here = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parent
     print(f"Parcheando Indie Now Subtítulos en {here}…\n")
@@ -279,6 +371,7 @@ def main() -> int:
         "indie_ui.py": patch_indie_ui,
         "gpu_runtime.py": patch_gpu_runtime,
         "cortes.py": patch_cortes,
+        "verificacion.py": patch_verificacion,
     }
     for name, fn in targets.items():
         candidate = here / name
@@ -286,7 +379,17 @@ def main() -> int:
             fn(candidate)
         else:
             print(f"  · {name}: no encontrado (saltando)")
-    print("\nListo.")
+    instalar_launcher_linux(here)
+
+    problemas = verificar(here)
+    if problemas:
+        print("\nERROR: la conversión a Linux quedó incompleta:", file=sys.stderr)
+        for x in problemas:
+            print(f"  - {x}", file=sys.stderr)
+        print("\nRevisá cachyos/subs/parche.py: cambió el código de Windows "
+              "y algún patrón ya no coincide.", file=sys.stderr)
+        return 1
+    print("\nVerificación: todos los parches aplicados y sintaxis OK.")
     return 0
 
 
